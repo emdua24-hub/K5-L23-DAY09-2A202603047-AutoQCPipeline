@@ -39,6 +39,82 @@ from ..common import WARN, Issue, iou_xywh, parse_yolo_line  # noqa: F401
 from ..model_cache import get_preds  # noqa: F401
 
 
+NAME = "second_opinion"
+
+
+def _labels_with_lines(ds, stem):
+    """[(số dòng gốc, (id, cx, cy, w, h))] của các dòng hợp lệ. None nếu không có file nhãn.
+    Không dùng valid_boxes vì nó làm mất số dòng (FALSE_POS cần số dòng)."""
+    lines = ds.read_label_lines(stem)
+    if lines is None:
+        return None
+    out = []
+    for n, text in lines:
+        try:
+            b = parse_yolo_line(text)
+        except ValueError:                       # dòng hỏng: label_format đã báo, ở đây bỏ qua
+            continue
+        if 0 <= b[0] < len(ds.classes):
+            out.append((n, b))
+    return out
+
+
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    p = cfg["second_opinion"]
+    conf, min_area, fp_conf = p["conf"], p["min_area_px"], p["fp_conf"]
+    iou_missing, iou_match, iou_loose = p["iou_missing"], p["iou_match"], p["iou_loose"]
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+
+    issues = []
+    for img in ds.image_files():
+        stem = img.stem
+        if stem not in preds:
+            continue
+        labels = _labels_with_lines(ds, stem)
+        if labels is None:                       # chưa có file nhãn: MISSING_LABEL_FILE lo, không so ở đây
+            continue
+        size = ds.image_size(stem)
+        if size is None:                         # ảnh hỏng: không tính được diện tích px
+            continue
+        W, H = size
+        rows = preds[stem]
+
+        # --- phía model: dự đoán tin cậy + đủ lớn mà nhãn không phủ đúng
+        for r in rows:
+            r_cls, r_conf, r_box = int(r[0]), r[1], tuple(r[2:6])
+            if r_conf < conf or r_box[2] * W * r_box[3] * H < min_area:
+                continue
+            cands = [(iou_xywh(r_box, b[1:]), b[0]) for _, b in labels]
+            cands = [(iou, c) for iou, c in cands if iou >= iou_missing]
+            same = [iou for iou, c in cands if c == r_cls]
+            other = [iou for iou, c in cands if c != r_cls]
+            name = ds.classes[r_cls] if 0 <= r_cls < len(ds.classes) else str(r_cls)
+
+            if not cands:
+                issues.append(Issue(NAME, WARN, "POSSIBLE_MISSING", stem,
+                                    f"model thấy {name} (conf {r_conf:.2f}) mà nhãn không có box",
+                                    extra={"conf": r_conf, "cls": r_cls, "box": list(r_box)}))
+            elif same:
+                best = max(same)
+                if best < iou_loose:
+                    issues.append(Issue(NAME, WARN, "POSSIBLE_LOOSE_BOX", stem,
+                                        f"box {name} lệch/lỏng so với model (IoU {best:.2f})",
+                                        extra={"conf": r_conf, "iou": round(best, 4), "box": list(r_box)}))
+            elif max(other) >= iou_match:
+                best = max(other)
+                label_cls = next(c for iou, c in cands if c != r_cls and iou == best)
+                issues.append(Issue(NAME, WARN, "POSSIBLE_WRONG_CLASS", stem,
+                                    f"nhãn {ds.classes[label_cls]} nhưng model nói {name} (conf {r_conf:.2f}, IoU {best:.2f})",
+                                    extra={"conf": r_conf, "iou": round(best, 4), "label_cls": label_cls, "pred_cls": r_cls}))
+            # còn lại: chỉ có nhãn khác lớp với IoU trong [iou_missing, iou_match) -> mơ hồ, không cờ
+
+        # --- phía nhãn: box không khớp vật nào model thấy (conf >= fp_conf, KHÔNG lọc diện tích)
+        fp_boxes = [tuple(r[2:6]) for r in rows if r[1] >= fp_conf]
+        for n, b in labels:
+            best = max((iou_xywh(b[1:], pb) for pb in fp_boxes), default=0.0)
+            if best < iou_missing:
+                issues.append(Issue(NAME, WARN, "POSSIBLE_FALSE_POS", stem,
+                                    f"box {ds.classes[b[0]]} không khớp dự đoán nào của model (IoU tốt nhất {best:.2f})",
+                                    line=n, extra={"iou": round(best, 4)}))
+    return issues
