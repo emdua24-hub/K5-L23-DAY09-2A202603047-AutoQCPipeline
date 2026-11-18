@@ -47,12 +47,26 @@ Precision / Recall trên bộ calib (39 ảnh, `calibration_report.md`).
 Ghi nhận thêm, máy và người khớp nhau ở `img_0001`: tự xem thấy thiếu 1 người bên phải; máy báo `POSSIBLE_MISSING` (person, conf 0,95) đúng vị trí, và còn bắt thêm 1 `DUP_BOX` (dòng 3 trùng dòng 1) mà mắt thường khó thấy.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-**Chưa chạy.** Máy cá nhân không có GPU; phần train trên Colab là tùy chọn và sẽ làm sau. Chưa có số liệu nên không đưa ra kết luận nào về clean so với raw.
+Colab T4, `yolo26n.pt`, 20 epoch, batch 16, imgsz 640, seed 0 và 1; cùng val (`gold_val`, 40 ảnh) và test (100 ảnh). `raw` train trên 224 ảnh, `clean` trên 202 ảnh (`clean_v1`, bản nháp Hold). Kết quả trong `submission/results/comparison.md`:
+
+| biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
+|---|---|---|---|---|---|---|
+| raw | 224 | 2 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| clean | 202 | 2 | 0.701 ± 0.025 | 0.487 ± 0.008 | 0.759 ± 0.003 | 0.625 ± 0.019 |
+
+Chênh mAP50 (clean − raw) = **−0.025**, bằng đúng độ lệch giữa 2 seed của `clean` (0.025). Từng seed: `clean` 0.718 / 0.683, `raw` 0.726 / 0.726. Seed 0 của `clean` chỉ kém `raw` 0.008. Độ lệch của `raw` gần 0 chỉ là trùng hợp: precision của `raw` vẫn dao động ±0.061 giữa 2 seed.
+
+**Kết luận trung thực:** với 2 seed và 100 ảnh test, chênh lệch **nằm trong nhiễu**. Thí nghiệm **không** cho thấy `clean` tốt hơn `raw`, và cũng không đủ để nói `clean` kém hơn. Phần lớn chênh lệch đến từ lớp `truck`: AP50 0.59 / 0.49 ở `clean` so với 0.66 / 0.64 ở `raw`. Riêng `clean` đã dao động 0.10 giữa 2 seed, trong khi `truck` chỉ có 41 box.
+
+**Giả thuyết và cách kiểm:**
+1. **`raw` được thổi phồng nhờ rò rỉ test.** Pipeline phát hiện 5 ảnh `LEAK_TEST` trong raw (`01_intake`): model `raw` đã thấy chúng lúc train. Cách kiểm: đo lại mAP trên test sau khi bỏ 5 ảnh test bị trùng (theo cột `extra.of` của `01_intake.csv`). Nếu `raw` tụt mà `clean` giữ nguyên thì chênh lệch là do rò rỉ.
+2. **`clean` có ít dữ liệu hơn và vẫn còn nhãn sai.** `clean` có ít hơn 22 ảnh (loại 8 trùng tuyệt đối, 4 gần trùng, 5 rò rỉ, 5 hỏng/nhỏ). Ngoài ra còn 38 ảnh có cảnh báo chưa được người duyệt (Hold), và 20 dòng bị `drop_line`: vật trong những dòng đó thành "không có nhãn", nên model bị dạy rằng đó là nền. Cách kiểm: train thêm biến thể `oracle` (cùng ảnh với `clean`, nhãn người) làm chặn trên. Nếu `oracle` vượt `raw` rõ rệt thì vấn đề nằm ở phần nhãn chưa duyệt chứ không phải ở việc loại ảnh.
+3. **Nhiễu thống kê.** Chỉ có 2 seed và 100 ảnh test, nên AP từng lớp dao động tới 0.10. Cách kiểm: tăng lên ≥ 5 seed và báo cáo khoảng tin cậy trước khi kết luận.
 
 ## 6. Quyết định và ghi chú AI
 **(a) Quyết định:** giữ **Hold**. `clean_v1` chỉ dùng thử nghiệm, chưa phát hành. Để thành Release, người duyệt cần xử lý thêm ít nhất 18 trong 38 ảnh còn cảnh báo (để còn < 10% của 202 ảnh, tức ≤ 20 ảnh), ưu tiên theo `05_review_queue.csv`. Không đạt Release bằng cách nâng `conf` lên 0,8: cách đó chỉ làm máy im lặng hơn, không làm nhãn sạch hơn.
 
 **(b) Ghi chú AI** (dùng Claude Code):
-- *Prompt chính:* yêu cầu cùng làm lab; AI đọc docstring và test của từng module (đầu vào, đầu ra, mã lỗi, ngưỡng lấy từ `cfg`), viết theo TDD từng module, mỗi module một commit.
+- *Prompt chính:* yêu cầu cùng làm lab, làm từng bước theo guidline và giải thích chi tiết code, tuân thủ các rule trong repo; AI đọc docstring và test của từng module (đầu vào, đầu ra, mã lỗi, ngưỡng lấy từ `cfg`), viết theo TDD từng module, mỗi module một commit.
 - *Cách kiểm:* chạy `pytest` (79/79 xanh); đọc và hỏi lại từng khối code; chạy `make run`; đối chiếu `02_error_list_v1` với ảnh vẽ nhãn (`img_0001`, `img_0030`); soi bằng mắt các cặp ảnh trùng khi calibrate.
 - *Một lần AI sai/thừa:* bản đầu của `autofix` có điều kiện thừa `len(kept) != len(original) or kept != original`, đã rút gọn. Ở `gate`, cách so `n >= 0.1 * n_images` cho kết quả sai ở biên (0,1 × 30 = 3,0000000000000004), phải so bằng tỉ lệ đã làm tròn.
