@@ -47,7 +47,7 @@ Precision / Recall trên bộ calib (39 ảnh, `calibration_report.md`).
 Ghi nhận thêm, máy và người khớp nhau ở `img_0001`: tự xem thấy thiếu 1 người bên phải; máy báo `POSSIBLE_MISSING` (person, conf 0,95) đúng vị trí, và còn bắt thêm 1 `DUP_BOX` (dòng 3 trùng dòng 1) mà mắt thường khó thấy.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-Colab T4, `yolo26n.pt`, 20 epoch, batch 16, imgsz 640, seed 0 và 1; cùng val (`gold_val`, 40 ảnh) và test (100 ảnh). `raw` train trên 224 ảnh, `clean` trên 202 ảnh (`clean_v1`, bản nháp Hold). Kết quả trong `submission/results/comparison.md`:
+Colab T4, `yolo26n.pt`, 20 epoch, batch 16, imgsz 640, seed 0 và 1; cùng val (`gold_val`, 40 ảnh) và test (100 ảnh). `raw` train trên 224 ảnh, `clean` trên 202 ảnh (`clean_v1`, bản nháp Hold). Ở ô train, Ultralytics báo `raw` có 224 ảnh nhưng chỉ **218 file nhãn**. 6 ảnh thiếu nhãn khớp đúng 6 lỗi `MISSING_LABEL_FILE` mà pipeline đã bắt; Ultralytics coi chúng là ảnh nền, tức `raw` học rằng 6 ảnh có vật thể là "không có vật". Kết quả trong `submission/results/comparison.md`:
 
 | biến thể | #ảnh train | số seed | map50 (TB ± độ lệch) | map50_95 (TB ± độ lệch) | precision (TB ± độ lệch) | recall (TB ± độ lệch) |
 |---|---|---|---|---|---|---|
